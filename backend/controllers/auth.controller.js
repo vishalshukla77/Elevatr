@@ -3,30 +3,45 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { sendWelcomeEmail } from "../emails/emailHandlers.js";
 
+// Email validation regex
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const signup = async (req, res) => {
 	try {
 		const { name, username, email, password } = req.body;
 
+		// Check for missing fields
 		if (!name || !username || !email || !password) {
 			return res.status(400).json({ message: "All fields are required" });
 		}
+
+		// Validate email format
+		if (!emailRegex.test(email)) {
+			return res.status(400).json({ message: "Invalid email format" });
+		}
+
+		// Validate password length
+		if (password.length < 6) {
+			return res.status(400).json({ message: "Password must be at least 6 characters long" });
+		}
+
+		// Check for existing email
 		const existingEmail = await User.findOne({ email });
 		if (existingEmail) {
 			return res.status(400).json({ message: "Email already exists" });
 		}
 
+		// Check for existing username
 		const existingUsername = await User.findOne({ username });
 		if (existingUsername) {
 			return res.status(400).json({ message: "Username already exists" });
 		}
 
-		if (password.length < 6) {
-			return res.status(400).json({ message: "Password must be at least 6 characters" });
-		}
-
+		// Hash password
 		const salt = await bcrypt.genSalt(10);
 		const hashedPassword = await bcrypt.hash(password, salt);
 
+		// Create user
 		const user = new User({
 			name,
 			email,
@@ -36,26 +51,31 @@ export const signup = async (req, res) => {
 
 		await user.save();
 
-		const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "3d" });
-
-		res.cookie("jwt-linkedin", token, {
-			httpOnly: true, // prevent XSS attack
-			maxAge: 3 * 24 * 60 * 60 * 1000,
-			sameSite: "strict", // prevent CSRF attacks,
-			secure: process.env.NODE_ENV === "production", // prevents man-in-the-middle attacks
+		// Generate JWT
+		const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+			expiresIn: "3d",
 		});
 
+		// Set cookie
+		res.cookie("jwt-linkedin", token, {
+			httpOnly: true,
+			maxAge: 3 * 24 * 60 * 60 * 1000, // 3 days
+			sameSite: "strict",
+			secure: process.env.NODE_ENV === "production",
+		});
+
+		// Respond to client
 		res.status(201).json({ message: "User registered successfully" });
 
-		const profileUrl = process.env.CLIENT_URL + "/profile/" + user.username;
-
+		// Send welcome email
+		const profileUrl = `${process.env.CLIENT_URL}/profile/${user.username}`;
 		try {
 			await sendWelcomeEmail(user.email, user.name, profileUrl);
 		} catch (emailError) {
 			console.error("Error sending welcome Email", emailError);
 		}
 	} catch (error) {
-		console.log("Error in signup: ", error.message);
+		console.error("Error in signup:", error.message);
 		res.status(500).json({ message: "Internal server error" });
 	}
 };
@@ -64,21 +84,25 @@ export const login = async (req, res) => {
 	try {
 		const { username, password } = req.body;
 
-		// Check if user exists
+		// Find user
 		const user = await User.findOne({ username });
 		if (!user) {
 			return res.status(400).json({ message: "Invalid credentials" });
 		}
 
-		// Check password
+		// Compare password
 		const isMatch = await bcrypt.compare(password, user.password);
 		if (!isMatch) {
 			return res.status(400).json({ message: "Invalid credentials" });
 		}
 
-		// Create and send token
-		const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "3d" });
-		await res.cookie("jwt-linkedin", token, {
+		// Generate token
+		const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+			expiresIn: "3d",
+		});
+
+		// Set cookie
+		res.cookie("jwt-linkedin", token, {
 			httpOnly: true,
 			maxAge: 3 * 24 * 60 * 60 * 1000,
 			sameSite: "strict",
@@ -87,7 +111,7 @@ export const login = async (req, res) => {
 
 		res.json({ message: "Logged in successfully" });
 	} catch (error) {
-		console.error("Error in login controller:", error);
+		console.error("Error in login controller:", error.message);
 		res.status(500).json({ message: "Server error" });
 	}
 };
@@ -101,7 +125,7 @@ export const getCurrentUser = async (req, res) => {
 	try {
 		res.json(req.user);
 	} catch (error) {
-		console.error("Error in getCurrentUser controller:", error);
+		console.error("Error in getCurrentUser controller:", error.message);
 		res.status(500).json({ message: "Server error" });
 	}
 };
